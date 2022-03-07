@@ -1,21 +1,8 @@
-###################################################################################################################
-#
-# Purpose: Simulation Model 
-#
-# Model 1: Y <- intercept + x*a + m*b - d*x*m + c1...c5 + error
-#
-# Last Update: 29 Jan 2022
-#
-###################################################################################################################
+#!/usr/bin/env Rscript
+args = commandArgs(trailingOnly=TRUE)
 
-
-####################################################
-#               LOAD IN PACKAGES
-####################################################
-
-#packages <- c("data.table","tidyverse","skimr","here","mvtnorm","latex2exp","earth",
-           #   "readxl","VGAM", "coefvgam", "ranger","xgboost","mgcv","glmnet","NbClust","factoextra",
-            #  "SuperLearner", "AIPW", "dplyr", "cluster", "ggplot2")
+## NOTE: We can run this program locally from the command line, and thus leave the package 
+## installation as is. Once we run on cluster, need to change library location.
 
 packages <- c("data.table","tidyverse","skimr","here","mvtnorm","latex2exp","earth",
    "readxl","VGAM", "ranger","xgboost","mgcv","glmnet","NbClust","factoextra",
@@ -31,41 +18,34 @@ for (package in packages) {
   library(package, character.only=T)
 }
 
-thm <- theme_classic() +
-  theme(
-    legend.position = "top",
-    legend.background = element_rect(fill = "transparent", colour = NA),
-    legend.key = element_rect(fill = "transparent", colour = NA)
-  )
-theme_set(thm)
-
+# CREATE EXPIT AND LOGIT FUNCTIONS
+expit <- function(x){ exp(x)/(1+exp(x)) }
+logit <- function(x){ log(x/(1-x)) }
 
 ## FUNCTION SET-UP
 ## TRUE VALUES
 true1 <- 6
 true2 <- 3
 
-#nsim <- 5                                                                        #cancelled out when function is ran
+number_sims <- as.numeric(args[1])
 
-#DUMMY TABLE TO EXPORT THE RESULTS OF THE SIMULATION
-#cols <- c("point_est1", "point_est2", "num_clust")
-#cols <- c(cols, "nsim")
-#res.est <- data.frame(matrix(nrow=nsim,ncol=length(cols)))
-#colnames(res.est) <- cols
-#res.se <- res.est
+cat(paste("Number of Simulations:", number_sims, "\n"))
 
-# CREATE EXPIT AND LOGIT FUNCTIONS
-expit <- function(x){ exp(x)/(1+exp(x)) }
-logit <- function(x){ log(x/(1-x)) }
+sample_size <- as.numeric(args[2])
+
+cat(paste("Sample Size for Each Sim:", sample_size), "\n")
+
+random_argument_for_checking <- args[3]
+
+# this should say "hello_world!"
+cat(paste("Do you have anything to say?:",random_argument_for_checking), "\n")
 
 ## FUNCTION
-cluster_sim <- function(nsim, sample_size){                             
-  i = nsim
-  #i = 6
-  n = sample_size                                                                      
-  #n = 100
+cluster_sim <- function(nsim, sample_size){
+  
+  n = sample_size
   p = 5
-  set.seed(i)                                                                 
+  set.seed(nsim)
   
   ## CONFOUNDERS (C = 5)
   sigma <- matrix(0,nrow=p,ncol=p); diag(sigma) <- 1
@@ -85,9 +65,10 @@ cluster_sim <- function(nsim, sample_size){
   mu      <- muMatT%*%beta
   
   # PROPENSITY SCORE MODEL
-  pi   <- expit(piMatT%*%theta)
+  ## pi is an actual parameter in base R, so good practice not to overwrite
+  pi_x   <- expit(piMatT%*%theta)
   pi_m <- expit(piMatT2%*%theta2)
-  x    <- rbinom(n,1,pi)
+  x    <- rbinom(n,1,pi_x)
   m    <- rbinom(n,1,pi_m)
   
   # OUTCOME MODEL: EXPOSURE VALUE UNDER M == 0 IS 6; VALUE UNDER M == 1 IS 3
@@ -132,8 +113,10 @@ cluster_sim <- function(nsim, sample_size){
   
   # now search for clusters
   #trying the NbClust package
+  pdf(file = NULL)
   clust <- NbClust(data = clust_dat, diss=NULL, distance = "euclidean", min.nc = 2, max.nc = 15, method = "kmeans", index = "all", alphaBeale = 0.1)
-  
+  dev.off()
+
   df <- data.frame(clust$Best.nc[1,1:26])
   names(df) <- "number_clust"
   row.names(df) <- NULL
@@ -169,57 +152,9 @@ cluster_sim <- function(nsim, sample_size){
   return(res)
 }                                                                               
 
-summary(cluster_reg)
-#cluster_sim(nsim = 6, sample = 100)
-##############################################################
-
 ### RUNNING THE FUNCTION
-system.time(results <- lapply(1:1000, function(x) cluster_sim(nsim=x,sample_size=1000))) #Error: $ operator not defined for this S4 class [instead of $, use]
-saveRDS(results, file = 'Results.Rds')
+system.time(results <- lapply(1:number_sims, function(x) cluster_sim(nsim=x,sample_size=sample_size)))
 
-results[[1]] #output from the first simulation run
-#estimated effect of m is [[2]]-[[1]] for the 
-####
-#
-# Next Steps: 
-#
-# 10 runs with N = 1,000 (338.69 seconds) 5 mins
-# 20 runs with N = 1,000 (667.31 seconds) 10 mins
-# 40 runs with N = 1,000 (1300.45 seconds) 20 mins
-# 60 runs with N = 1,000 (2420.32 seconds) 40 mins
-# 
-#
-runs <- c(10, 20, 40, 60)
-minutes <- c(5, 10, 20, 40)
-sim_time <- data.frame(runs, minutes)
-ggplot(sim_time, aes(runs, minutes)) +
-  geom_point() +
-  ggtitle("Time to run simulations with sample size of 1,000")
-#
-#
-####
-#
+saveRDS(results, file = here("data","Results.Rds"))
 
-### COMPILING THE RESULTS
-res <- do.call(rbind, results)
-res <- as.data.frame(res)
-
-#What percentage of runs result in n = 2 clusters?
-#select the number of clusters from each run
-number_of_cluster <-matrix(NA, ncol = 1)
-clusters <- for(i in 1:1000){
-  #number_of_clusters <- rbind(number_of_clusters, max(results[[i]][[3]]$Group.1))
-  number_of_cluster <- rbind(number_of_cluster,as.matrix(max(results[[i]][[3]]$Group.1)))
-}
-number_of_cluster <- number_of_cluster[-1,]
-table(number_of_cluster)
-
-saveRDS(results, file = 'Results.Rds')
-
-#need to store cluster_num
-
-#based on the output from the function
-#write a second program - post processing program (the code needed to analyze the data from this function)
-#handle each component of the results object to give you the effect among the different strata
-
-str(Results)
+print(results[[1]])
